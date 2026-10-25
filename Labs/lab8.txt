@@ -1,0 +1,172 @@
+---
+title: "lab8"
+output: html_document
+date: "2023-09-05"
+---
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(message=FALSE, out.height="85%")
+# R code output should take up 85% of available height, 
+# so that the graphs won't be truncated by the footnote of each slide.
+
+options(tinytex.verbose = TRUE)
+
+library(ggplot2) # main library for data visualization
+library(rethinking)
+library(dagitty)
+library(expm)
+```
+
+
+## Exercise 1: Tulips and climate
+## 8M1
+Recall the tulips example from the chapter. Suppose another set of treatments adjusted the temperature in the greenhouse over two levels: cold and hot. The data in the chapter were collected
+at the cold temperature. You find none of the plants grown under the hot temperature developed any blooms at all, regardless of the water and shade levels. Can you explain this result in terms of interactions between water, shade, and temperature?
+
+mu = a +water + shade + temperature + ws + st + wt + wst
+
+
+## 8M2 
+Can you invent a regression equation that would make the bloom size zero, whenever the temperature is hot?
+if temperature is hot t=0 if cold t=1
+mu = t(a + w + s + ws)
+
+another way to write the same thing
+mu = (a + w + s) * (1- T) where t=1 when hot
+
+
+## 8H1
+Return to the data(tulips) example in the chapter. Now include the bed variable as a predictor in the interaction model. Don’t interact bed with the other predictors; just include it as a main effect. Note that bed is categorical. So to use it properly, you will need to either construct dummy variables or rather an index variable, as explained in Chapter 5.
+
+```{r,echo=TRUE}
+data(tulips)
+d <- tulips
+str(d)
+
+# make bed an index variable
+d$bed_inx <- coerce_index(d$bed)
+
+# center water and shade
+d$water.c <- d$water-mean(d$water)
+d$shade.c <- d$shade-mean(d$shade)
+
+#scale bloom by its max
+d$blooms_std <- d$blooms / max(d$blooms)
+
+# now blooms_std ranges from 0 to 1, and both water_cent and shade_cent range from −1 to 1.
+```
+*Note* in the live lab/video I tried to run this model without standardizing blooms and I could nto get it to fit under the time limit. So here I standardize blooms like in the chapter to make fitting easier.
+
+```{r}
+mod <- quap(alist(
+  blooms_std ~ dnorm(mu, sigma),
+  mu <- a[bed_inx] + bW*water.c + bS*shade.c + bWS*water.c*shade.c,
+  a[bed_inx] ~ dnorm( 0.5 , 0.25 ) ,
+  bW ~ dnorm( 0 , 0.25 ) ,
+  bS ~ dnorm( 0 , 0.25 ) ,
+  bWS ~ dnorm( 0 , 0.25 ) ,
+  sigma ~ dexp( 1 )
+) , data = d)
+#start = list(a = rep(130, 3), bW = 0 , bS = 0, bWS = 0, sigma = 90), data = tulips)
+
+precis(mod, depth = 2)
+```
+beds 'b' and 'c' had more blooms than bed 'a'. Bed 'c' bloomed the most but only a little better than 'b'. *Remember* blooms is now scaled by maximum. 
+
+But these are just means, what is the posterior distribution of the difference between beds? We can calculate it by sampling the posterior.
+```{r}
+post <- extract.samples(mod)
+
+diffb_c <- post$a[,2] - post$a[,3]
+
+HPDI(diffb_c)
+```
+So while expected difference is there, the posterior distribution has a lot pf probability both sides of 0 (given the scale). SO what do we make of this? Including bed in our regression as an index variable did not make an changes to the qualitative inference of the experiment, even though there are probably differences among beds.
+
+## Exercise 2: Revisiting the country ``development" example
+## 8H3
+Consider again the data(rugged) data on economic development and terrain ruggedness, examined in this chapter. One of the African countries in that example, Seychelles, is far outside
+the cloud of other nations, being a rare country with both relatively high GDP and high ruggedness. Seychelles is also unusual, in that it is a group of islands far from the coast of mainland Africa, and its main economic activity is tourism.
+```{r}
+data("rugged")
+d <- rugged
+d <- rugged[complete.cases(rugged$rgdppc_2000),]
+d$log_gdp <- log(d$rgdppc_2000)
+d$log_gdp_std <- d$log_gdp / mean(d$log_gdp)
+d$rugged_std <- d$rugged / max(d$rugged)
+d$cid <- ifelse(d$cont_africa == 1, 1, 2)
+```
+(a) Focus on model m8.5 from the chapter. Use WAIC pointwise penalties and PSIS Pareto k values to measure relative influence of each country. By these criteria, is Seychelles influencing the results? Are there other nations that are relatively influential? If so, can you explain why?
+\* note m8.5 is a typo in the book, should be m8.3
+
+```{r}
+# m8.3 in book
+m8.3 <- quap(alist(
+  log_gdp_std ~ dnorm(mu, sigma),
+  mu <- a[cid] + b[cid]*(rugged_std - 0.215),
+  a[cid] ~ dnorm(1, 0.1),
+  b[cid] ~ dnorm(0, 0.3),
+  sigma ~ dexp(1)
+), data = d)
+
+precis(m8.3, depth = 2)
+
+```
+
+Next, we look at point-wise WAIC values. 
+```{r}
+WAIC <- WAIC(m8.3, pointwise = TRUE)
+plot(WAIC$penalty)
+#abline(h = 0.3, col = "red")
+
+as.character(d[WAIC$penalty > 0.3, ]$country)
+```
+
+Now, we do the same with point-wise PSIS Pareto k values. 
+```{r}
+PSIS <- PSIS(m8.3, pointwise = TRUE)
+plot(PSIS$k)
+abline(h = .35, col = "red")
+
+as.character(d[PSIS$k > .35, ]$country)
+```
+```{r}
+plot(PSIS$k, WAIC$penalty)
+```
+
+
+(b) Now use robust regression, as described in the previous chapter. Modify m8.3 to use a Student-t distribution with ν = 2. Does this change the results in a substantial way?
+
+```{r}
+# m8.3 in book
+m8.3_b <- quap(alist(
+  log_gdp_std ~ dstudent(nu = 2, mu, sigma),
+  mu <- a[cid] + b[cid]*(rugged_std - 0.215),
+  a[cid] ~ dnorm(1, 0.1),
+  b[cid] ~ dnorm(0, 0.3),
+  sigma ~ dexp(1)
+), data = d)
+
+precis(m8.3_b, depth = 2)
+precis(m8.3, depth = 2)
+```
+
+```{r}
+compare(m8.3, m8.3_b, func = PSIS)
+```
+```{r}
+WAIC <- WAIC(m8.3_b, pointwise = TRUE)
+plot(WAIC$penalty)
+abline(h = 0.2, col = "red")
+
+as.character(d[WAIC$penalty > 0.2, ]$country)
+```
+```{r}
+PSIS <- PSIS(m8.3_b, pointwise = TRUE)
+plot(PSIS$k)
+#abline(h = .35, col = "red")
+
+as.character(d$country[as.numeric(rownames(PSIS[order(PSIS$k), ])[1:5])])
+# find countries top 5 K values
+
+as.character(d[PSIS$k > 0.2, ]$country) # find countries above a threshold
+```

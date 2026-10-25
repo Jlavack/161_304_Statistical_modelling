@@ -1,0 +1,354 @@
+---
+title: "Lab7"
+output: pdf_document
+
+---
+Te reo language week:
+In effort to learn new thing, I incorporated some te reo words that are new to me. Appologies if they do not compile with this R markdown.
+tauanga: 1. (modifier) statistical 2. (noun) statistics
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# order is important when packages have functions of the same name, good practice is name the package::function
+library(tidyverse)
+library(dagitty)
+library(rethinking)
+```
+
+## Exercise 1: Die entropy
+### 7E3
+Suppose a four-sided die is loaded such that, when tossed onto a table, it shows “1” 20%, “2” 25%, “3” 25%, and “4” 30% of the time. What is the entropy of this die?
+
+Entropy is the average log-probability of an event given by the equation:
+
+$$ H(p) = - \mathbb{E} \log(p_i) = - \sum_{i=1}^{n}  p_i \log(p_i) $$
+
+
+Thus, for each probability $p_i$, we multiply $p_i$ by $\log(p_i$), sum all the values, and then multiply the sum by negative one. 
+
+
+To implement this, we will first write a couple of functions to do the calculations. We could do this without functions, but functions will allow us to handle cases where $p_i=0$, as will be the case in a couple of problems. The first function, \texttt{p\_logp()}, returns $0$ if $p$ is $0$, and returns \texttt{p*log(p)} otherwise. The \texttt{calc\_entropy()} function is a wrapper around \texttt{p\_logp()}, applying \texttt{p\_logp()} to each element of a vector of probabilities, summing the results, and multiplying the sum by $-1$.
+
+
+```{r}
+# returns 0 if p=0 otherwise return p*log(p)
+p_logp <- function(p){
+  if (p == 0) return(0)
+  p*log(p)
+}
+
+# calc entropy wrapper
+calc_entropy <- function(x){
+  avg_logprob <- sum(sapply(x, p_logp)) # sum (p * log(p))
+  (-1)*avg_logprob # multiply that sum by -1
+}
+```
+Now back to the question at hand:
+Suppose a four-sided die is loaded such that, when tossed onto a table, it shows “1” 20%, “2” 25%, “3” 25%, and “4” 30% of the time. What is the entropy of this die?
+```{r}
+probs <- c(0.2, 0.25, 0.25, 0.3) # make a vector of the probabilities
+calc_entropy(probs) # find the entropy
+```
+This results in an entropy of 1.376. 
+
+### 7E4
+Suppose another four-sided die is loaded such that it never shows “4”. The other three sides show equally often. What is the entropy of this die? Also, would you say that the entropy of these die is high? Low? Compared to what?
+
+```{r}
+prob_7e4 <- c(0.333, 0.333, 0.333, 0)
+
+calc_entropy(prob_7e4)
+```
+
+The entropy of this die is 1.09. It is lower than in the previous question. Even though there are 4 outcomes, 1 isn't observed we only observed 3 so there are effectively fewer outcomes than in the previous question. Therefore we would expect entropy to decrease. Fewer outcomes = lower entropy.  
+
+## Exercise 2: Effect number of parameters
+7M4
+What happens to the effective number of parameters, as measured by PSIS or WAIC, as a prior becomes more concentrated? Why? Perform some experiments, if you are not sure.
+
+$$ WAIC(y, \Theta) = -2 \left( \mathrm{lppd} - \sum_i \mathrm{var}_{\Theta} \underbrace{\log[p(y_i | \Theta)]}_{\text{Penalty term}} \right) $$
+
+
+```{r}
+# simulation for the WAIC eff para
+x <- rnorm(100, mean=1, sd=2)
+x1 <- rnorm(100, mean=0, sd=1) # not associated with outcome
+x2 <- rnorm(100, mean=x, sd=2) # spurious association
+y <- rnorm(100, mean = 2+2.4*x, sd=2)
+d <- data.frame( y=y, x=x, x1=x1, x2=x2)
+pairs(d)
+```
+
+
+```{r}
+# this is a big chunk of code that runs the experiment, it runs models with different priors and records the number of effective parameters
+
+N <- 10 # Number of experiments
+waic.l <- list()
+for (i in 1:N){
+# generate new data
+  x <- rnorm(100, mean=1, sd=2)
+  x1 <- rnorm(100, mean=0, sd=1) # not associated with outcome
+  x2 <- rnorm(100, mean=x, sd=2) # spurious assocation
+  y <- rnorm(100, mean = 2 + 2.4*x, sd=2)
+  d <- data.frame( y=y, x=x, x1=x1, x2=x2)
+# run the same model with 6 different priors
+mod_100 <- quap(
+  alist(
+    y ~ dnorm( mu, sigma) ,
+    mu <- a + b*x +b1*x1 + b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 100),
+    a ~ dnorm(0, 100),
+    sigma ~ dunif(0, 100)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=10)
+)
+
+waic.l[["100"]] <- c(waic.l[["100"]], WAIC(mod_100)$penalty) # add result to list
+
+
+mod_10 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 +b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 10),
+    a ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=10)
+  )
+waic.l[["10"]] <- c(waic.l[["10"]], WAIC(mod_10)$penalty)
+
+
+mod_1 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 + b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 1),
+    a ~ dnorm(0, 1),
+    sigma ~ dunif(0, 20)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=10)
+)
+waic.l[["1"]] <- c(waic.l[["1"]], WAIC(mod_1)$penalty)
+
+mod_0.5 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 +b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 0.5),
+    a ~ dnorm(0, 0.5),
+    sigma ~ dunif(0, 15)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=10)
+)
+waic.l[["0.5"]] <- c(waic.l[["0.5"]], WAIC(mod_0.5)$penalty)
+
+mod_0.2 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 +b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 0.2),
+    a ~ dnorm(0, 0.2),
+    sigma ~ dunif(0, 10)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=5)
+)
+waic.l[["0.2"]] <- c(waic.l[["0.2"]], WAIC(mod_0.2)$penalty)
+
+mod_0.1 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 +b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 0.1),
+    a ~ dnorm(0, 0.1),
+    sigma ~ dunif(0, 10)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=5)
+)
+waic.l[["0.1"]] <- c(waic.l[["0.1"]], WAIC(mod_0.1)$penalty)
+
+mod_0.01 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + b*x + b1*x1 +b2*x2,
+    c(b, b1, b2) ~ dnorm(0, 0.01),
+    a ~ dnorm(0, 10),
+    sigma ~ dunif(0, 10)
+  ), data=d, start=list(b=0, b1=0, b2=0, a=5, sigma=5)
+)
+waic.l[["0.01"]] <- c(waic.l[["0.01"]], WAIC(mod_0.01)$penalty)
+}
+
+# not the most efficient way to do this but too late now :-/
+options(scipen = 3)
+# compile the results of the models to make a figure
+prior <- c(100, 10, 1, 0.5, 0.2, 0.1, 0.01)
+waic.mean <- sapply(waic.l, mean)
+waic.sd <- sapply(waic.l, sd)
+plot(prior , waic.mean, ylim=c(0, 6),
+    xlab="Prior", ylab="Number of parameters", log="x",
+    pch=16, cex=1, col="steelblue", type="o",
+    main="Number of parameters")
+
+for (i in 1:length(prior)){
+    pts <- waic.mean[i] + c(-1,1)*waic.sd[i]
+        lines(c(prior[i],prior[i]), pts, col="steelblue", lwd=2)
+    }
+```
+
+## Exercise 3: Priors and over-/under-fitting
+7M5 
+Provide an informal explanation of why informative priors reduce overfitting.
+
+A:
+Overfitting when the model capture too much noise from data. This noise may not be present in new data therefore the model fails to correctly predict new data. Informative priors help the model be less excitable, tells the model to ignore too unrealistic values or at least lower the leverage those values have on the model. This improves predictions because the model captures less noise and learns the 'regular' properties of the data.  
+
+
+7M6
+Provide an informal explanation of why overly informative priors result in underfitting.
+
+Priors that are too restrictive on parameter space prevents the model from learning about the sample data. We basically just get the prior distributions back without learning anything about the data that could help with future predictions. 
+If priors are too concentrated we tell the model to ignore real patterns in the data which reduces predictive performance. 
+
+Setting priors and other regularization is a balancing act to avoid both under and over fitting. 
+## Exercise 4 Fictional Polynesian motutere
+7H3
+Consider three fictional Polynesian motutere. On each there is a Royal Ornithologist charged by the king with surveying the bird population. They have each found the following proportions of 5 important bird species:
+
+```{r}
+A <- c(0.2, 0.8, 0.05)
+B <- c(0.2, 0.1, 0.15)
+C <- c(0.2, 0.05, 0.7)
+D <- c(0.2, 0.0025, 0.05)
+E <- c(0.2, 0.0025, 0.05)
+islands <- as.factor(c(1, 2, 3))
+
+polynesian_islands <- data.frame(islands, A, B, C, D, E)
+print(polynesian_islands)
+```
+
+```{r}
+# make it tidy
+polynesian_islands1 <- polynesian_islands %>% 
+  tidyr::pivot_longer(cols = A:E, names_to = "species", values_to = "prop")
+print(polynesian_islands1)
+```
+
+
+Notice that each island sums to 1 (the proportion of each species sums to 1). 
+
+This problem has two parts. It is not computationally complicated. But it is conceptually tricky. 
+
+First, compute the entropy of each island’s bird distribution. Interpret these entropy values. 
+
+Second, use each island’s bird distribution to predict the other two.
+This means to compute the KL divergence of each island from the others, treating each island as if it were a statistical model of the other islands. You should end up with 6 different KL divergence values.
+
+Which island predicts the others best? Why?
+
+Part 1: calculate entropy for each island 
+```{r}
+# can use calc_entropy function from earlier
+island_entropy <- polynesian_islands1 %>% group_by(islands) %>% summarise(entropy = calc_entropy(prop)) 
+# Above (and in the video) I did this using the tidyverse frame work but you can also do this as a loop or with an apply function
+
+```
+
+Calculate KL divergence:
+
+$$D_{KL} = \sum_i p_i (\log(p_i) - \log(q_i)) $$
+```{r}
+# write a function for KL
+d_kl <- function(p, q){
+  sum(p*(log(p) - log(q)))
+}
+```
+
+
+```{r}
+# here we ask how different the islands are, imagine one probability distribution is used to predict another. 
+
+for(i in 1:3){
+  for(j in setdiff(1:3, i)){
+    print(paste0("the KL divergence between Island ", i, " and Island ", j, " is: ", d_kl(polynesian_islands1[polynesian_islands1$islands==i, "prop"], polynesian_islands1[polynesian_islands1$islands==j, "prop"])))
+  }
+}
+```
+Island 1 has the shortest distances (smallest divergence) when it is used as the model
+
+## Exercise 5: Marriage, age, and happiness
+7H4
+Recall the marriage, age, and hākoakoa collider bias example from Chapter 6. Run models m6.9 and m6.10 again (page 178). Compare these two models using WAIC (or PSIS, they will produce identical results). 
+
+Which model is expected to make better predictions? 
+Which model provides the correct causal inference about the influence of age on happiness? 
+Can you explain why the answers to these two questions disagree?
+
+Remember the DAG
+
+```{r}
+library(ggdag)
+
+hma_dag <- dagitty("dag{H -> M <- A}") # this is the causal inference we want to model
+coordinates(hma_dag) <- list(x = c(H = 1, M = 2, A = 3),
+    y = c(H = 1, M = 1, A = 1))
+
+ggplot(hma_dag, aes(x = x, y = y, xend = xend, yend = yend)) +
+    geom_dag_text(color = "black", size = 10) +
+    geom_dag_edges(edge_color = "black", edge_width = 2,
+    arrow_directed = grid::arrow(length = grid::unit(15, "pt"),
+    type = "closed")) +
+    theme_void()
+```
+
+
+```{r}
+# simulate data
+# this is direct from SR
+d <- sim_happiness( seed=1977 , N_years=1000 )
+
+d2 <- d[ d$age>17 , ] # only adults
+d2$A <- ( d2$age - 18 ) / ( 65 - 18 ) # standardize adult age
+
+d2$mid <- d2$married + 1 # marriage status index variable
+```
+
+
+```{r}
+# association between happiness and age conditioning on marriage
+m6.9 <- quap(
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a[mid] + bA*A,
+    a[mid] ~ dnorm( 0 , 1 ),
+    bA ~ dnorm( 0 , 2 ),
+    sigma ~ dexp(1)
+  ) , data=d2 )
+
+precis(m6.9,depth=2)
+```
+
+```{r}
+# association between happiness and age
+# without marriage status
+m6.10 <- quap( 
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a + bA*A,
+    a ~ dnorm( 0 , 1 ),
+    bA ~ dnorm( 0 , 2 ),
+    sigma ~ dexp(1)
+  ) , data=d2 )
+precis(m6.10)
+```
+
+Model comparison
+```{r}
+compare(m6.9, m6.10) # this function will print WAIC
+# Bonus use PSIS
+PSIS(m6.9); PSIS(m6.10)
+```
+WAIC shows preference for model m6.9 in terms of out of sample deviance 
+
+```{r}
+# do we need to condition for this DAG? do calculus
+adjustmentSets(hma_dag, exposure = "A", outcome = "H")
+```
+
+Model6.10 provides the correct causal inference as no additional conditioning is needed

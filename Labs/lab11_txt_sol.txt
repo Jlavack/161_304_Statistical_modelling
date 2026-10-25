@@ -1,0 +1,476 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This should compile to an html notebook but I have not paid much attention to formatting so no promises on how pretty it will look. 
+
+R considerations:
+Below I have changed the number of chains in some models to 2 rather than 4 listed in the book just to speed things up. Other models have chains = 4 and core = 4, adjust the number of cores/chains as you need for your computer. As practice problems you do not necessarily need 4 chains to understand what is going on with the posterior but in a real-world situation you probably would use 4 chains. If a model is not working I recommend you trouble shoot with 1 chain until it runs smoothly.
+```{r setup, warnings=FALSE, message=FALSE}
+knitr::opts_chunk$set(message=FALSE, out.height="85%")
+# R code output should take up 85% of available height, 
+# so that the graphs won't be truncated by the footnote of each slide.
+# I set messages to FALSE so the chain running should not appear in the markdown file. 
+
+options(tinytex.verbose = TRUE)
+
+library(ggplot2) # main library for data visualization
+library(rethinking)
+library(dagitty)
+library(expm)
+```
+## Lab 11 -- last lab of term
+
+## Exercise 1: Easy, easy to start
+Do exercises 11E1-11E3 and then 13E1 to 13E4
+
+11E1. If an event has probability 0.35, what are the log-odds of this event?
+$logit(p) = log(p/1-p)$
+if $p = 0.3$ then the log odds are $$ \mathrm{logit}(p) = \log \left( \frac{0.35}{1-0.35} \right) \approx -0.62, $$
+
+
+11E2. If an event has log-odds 3.2, what is the probability of this event?
+
+This one is asking for the reverse operation compared to 11E1. Going from log-odds to probability uses the logistic function to accomplish this. Notice the \texttt{plogis()} function that is exactly the logistic function (and \texttt{qlogis()} would be the logit function):
+$logit(p) = log(p/1-p)$
+inverse logit $exp(p)/ (1+exp(p))$
+
+$p = invlogit(3.2)$
+$plogis(3.2) = 0.96$
+
+11E3. Suppose that a coefficient in a logistic regression has value 1.7. What does this imply about the proportional change in odds of the outcome?
+The proportional change in odds is calculated by exponentiating the coefficient:
+
+$exp(1.7) = 5.47$
+
+This means that each unit change in the predictor variable multiplies the odds of the event by approximately 5.5. Make sure you write the log-odds and the odds (hence with the exponential of the linear model $a+1.7 \times x$) to identify this change. Also remark that the change in probability depends on the value of the probability itself, so on the value of $a$, the intercept and of that of the predictor $x$ too, since the probability writes:
+$$ p(x) = \frac{\exp(a+1.7 \times x)}{1+\exp(a+1.7 \times x)}. $$
+
+13E1. Which of the following priors will produce more shrinkage in the estimates?     
+    (a) $\alpha_{tank} \sim  Normal(0, 1)$; 
+    (b) $\alpha_{tank} \sim  Normal(0, 2)$.
+```{r}
+a <- plogis(rnorm(1000, 0, 1))
+b <- plogis(rnorm(1000, 0, 2))
+dens(a)
+dens(b, add = TRUE, lwd=2)
+```
+a) has more shrinkage 
+    
+I did the below questions in the video step by step but added only one answer below, try the others on your own.
+
+13E2. Rewrite the following model as a multilevel model.
+
+\begin{eqnarray*}
+y_i & \sim & \mathrm{Binomial}(1, p_i) \\
+\mathrm{logit}(p_i) & = & \alpha_{group[i]} + \Beta  x_{i}\\
+\alpha_{group} & \sim & \mathrm{Normal}(0, 1.5) \\
+\Beta & \sim & \mathrm{Normal}(0, 0.5) \\
+\end{eqnarray*}
+
+
+To turn the model into a multi-level model, we need to assign some hyper-priors. That is priors on parameters of likelihood distribution parameters. In this case, we express $\alpha_{group[i]}$ (a parameter) through a normal prior with another set of parameters: $\overline{\alpha}$ the mean, with a normal prior and $\sigma_{\alpha}$ with an Exponential prior. $\beta$ won't change here as it doesn't depend on the group. We could in theory...
+\begin{eqnarray*}
+y_i & \sim & \mathrm{Binomial}(1, p_i) \\
+\mathrm{logit}(p_i) & = & \alpha_{group[i]} + \beta x_i \\
+\alpha_{group} & \sim & \mathrm{Normal}(\overline{\alpha}, \sigma_{\alpha}) \\
+\overline{\alpha} & \sim & \mathrm{Normal}(0,2) \\
+\sigma_{\alpha} & \sim & \mathrm{Exponential}(1) \\
+\beta & \sim & \mathrm{Normal}(0,1)
+\end{eqnarray*}
+The numbers we feed into our hyperpriors here are difficult to assess for sensibility since we don't have any data to test the performance of both models and their assumptions.
+
+13E4. Write a mathematical model formula for a Poisson regression with varying intercepts.
+
+
+## Exercise 2: Quadratic vs MCMC
+Do exercise 11M7
+11M7. Use quap to construct a quadratic approximate posterior distribution for the chimpanzee model that includes a unique intercept for each actor, m11.4 (page 330). Compare the quadratic approximation to the posterior distribution produced instead from MCMC. Can you explain both the differences and the similarities between the approximate and the MCMC distributions? Relax the prior on the actor intercepts to Normal(0,10). Re-estimate the posterior using both ulam and quap. Do the differences increase or decrease? Why?
+```{r}
+data("chimpanzees")
+
+chimpanzees$treatment <- 1 + chimpanzees$prosoc_left + 2*chimpanzees$condition
+
+dat_list <- list(pulled_left = chimpanzees$pulled_left,
+                 actor = chimpanzees$actor, 
+                 treatment = chimpanzees$treatment)
+
+q11.4 <- quap( alist(
+  pulled_left ~ dbinom( 1 , p ),
+  logit(p) <- a[actor] + b[treatment],
+  a[actor] ~ dnorm(0, 1.5),
+  b[treatment] ~ dnorm(0, 0.5)
+), data=dat_list)
+
+m11.4 <- ulam( alist(
+  pulled_left ~ dbinom( 1 , p ),
+  logit(p) <- a[actor] +b[treatment],
+  a[actor] ~ dnorm(0, 1.5),
+  b[treatment] ~ dnorm(0, 0.5)
+), data=dat_list, chains = 2, log_lik =TRUE)
+  
+plot(precis(m11.4, depth = 2))
+plot(precis(q11.4, depth = 2))
+```
+Now if we look quickly at a summary of the posterior, we see that there isn't much difference between the distribution of the parameters, either of the actors or for the treatments. The only parameter that shows a noticeable difference is Actor 2. Looking a little closer, we see that for Actor 2, MCMC results in a posterior shifted slightly to the right. This is because the MCMC posterior is slightly skewed, whereas the quadratic approximation	 posterior is forced to be Gaussian. Therefore, more density is given to the lower tail and less to the upper tail than in the MCMC posterior.
+
+
+Now let's modify our prior distributions. By loosening the prior, we are letting the actor intercepts take even more extreme values. This should have the effect of letting the posterior become even more skewed.
+```{r}
+q11.4bis <- quap( alist(
+  pulled_left ~ dbinom( 1 , p ),
+  logit(p) <- a[actor] +b[treatment],
+  a[actor] ~ dnorm(0, 10),
+  b[treatment] ~ dnorm(0, 0.5)
+), data=dat_list)
+
+m11.4bis <- ulam( alist(
+  pulled_left ~ dbinom( 1 , p ),
+  logit(p) <- a[actor] +b[treatment],
+  a[actor] ~ dnorm(0, 10),
+  b[treatment] ~ dnorm(0, 0.5)
+), data=dat_list, chains = 2, log_lik =TRUE)
+  
+plot(precis(m11.4bis, depth = 2))
+plot(precis(q11.4bis, depth = 2))
+```
+
+```{r}
+q_samp <- extract.samples(q11.4bis)
+m_samp <- extract.samples(m11.4bis)
+
+dens(q_samp$a[,2], xlab = "alpha(Actor2), black = quap, red= MCMC", lwd =2)
+dens(m_samp$a[,2], col = 2, lwd = 2, add = TRUE)
+```
+
+## Exercise 3: The eagle pirate
+Do exercise 11H2.
+The data contained in library(MASS); data(eagles) are records of salmon pirating attempts by Bald Eagles in Washington State. See ?eagles for details. While one eagle feeds, sometimes another will swoop in and try to steal the salmon from it. Call the feeding eagle the “victim” and the thief the “pirate.” Use the available data to build a binomial GLM of successful pirating attempts.
+```{r}
+data(eagles, package = "MASS")
+
+eagle_dat <- data.frame(row.names = rownames((eagles)))
+eagle_dat$pirateL <- ifelse(eagles$P == "L", 1, 0)
+eagle_dat$victimL <- ifelse(eagles$V == "L", 1, 0)
+eagle_dat$pirateA <- ifelse(eagles$A == "A", 1, 0)
+eagle_dat$y <- eagles$y
+eagle_dat$n <- eagles$n
+```
+
+where y is the number of successful attempts, n is the total number of attempts, P is a dummy variable indicating whether or not the pirate had large body size, V is a dummy variable indicating whether or not the victim had large body size, and finally A is a dummy variable indicating whether or not the pirate was an adult. Fit the model above to the eagles data, using both quap and ulam. Is the quadratic approximation okay?
+```{r}
+eagle_quap <- quap(alist(
+   y ~ dbinom(n, p),
+   logit(p) <- a + bP * pirateL + bV * victimL + bA * pirateA,
+   a ~ dnorm(0, 1.5),
+   bP ~ dnorm(0, 1),
+   bV ~ dnorm(0, 1),
+   bA ~ dnorm(0, 1)
+), data = eagle_dat)
+
+eagle_ulam <- ulam(alist(
+   y ~ dbinom(n, p),
+   logit(p) <- a + bP * pirateL + bV * victimL + bA * pirateA,
+   a ~ dnorm(0, 1.5),
+   bP ~ dnorm(0, 1),
+   bV ~ dnorm(0, 1),
+   bA ~ dnorm(0, 1)
+), data = eagle_dat, chains=2, log_lik=TRUE, iter = 10000)
+
+plot(precis(eagle_quap))
+plot(precis(eagle_ulam))
+pairs(eagle_quap)
+pairs(eagle_ulam)
+
+```
+
+Now two models, the first with \texttt{quap()} and the second using \texttt{ulam()}. We can compare the parameter estimates using \texttt{precis()}. Overall, the estimates are very similar. However, we can note that the MCMC parameters are slightly more extreme than their respective quadratic approximation counterparts. This is because the MCMC posteriors do not have to be strictly Gaussian, and therefore can have a little more skew. If we used wider priors, the difference would be even more evident.
+
+Just like above you can try wider priors to show even more skew.
+
+Stopped here in the video.
+
+
+
+(b) Now interpret the estimates. If the quadratic approximation turned out okay, then it’s okay to use the quap estimates. Otherwise stick to ulam estimates. Then plot the posterior predictions. Compute and display both (1) the predicted probability of success and its 89% interval for each row (i) in the data, as well as (2) the predicted success count and its 89% interval. What different information does each type of posterior prediction provide?
+
+I will use the \texttt{ulam()} estimates, to account for the small asymmetry.
+
+First, the intercept log-odds, \texttt{a}, indicates the probability of a successful attempt for a pirate when all of the predictors are at zero. So that means a small immature pirate against a small victim has probability $\mathrm{logistic}(0.37) \approx 59\%$ of success.
+
+Second, what about the slope estimates? These estimates just change the intercept for the log-odds. So for example, the probability that a large immature pirate succeeds against a small victim would be $\mathrm{logistic}(0.37+2.66) \approx 95.4\%$. That is to say, the large pirate has good chances to succeed, according to the model. 
+
+Third, you can generate such predictions for all of the combinations, if you wish. And indeed, that's how the plotting of predictions works.
+
+Before that, what about the proportional odds (odds ratio) interpretations? You can exponentiate each $\beta$ estimate to get the proportional change in odds that arising from changing the corresponding dummy variable from 0 to 1. Ignoring the confidence intervals for the moment (they will appear in the plots to come), you can quickly exponentiate the $\beta$ estimates with: \texttt{round(exp(coef(eagle\_ulam)[2:4]),3)}.
+So this says that the odds $p/(1-p)$ of a successful attempt are multiplied by 14.2, when the pirate becomes large. That's a large effect. 
+
+Similarly, the odds of success are multiplied by 0.06, when the victim becomes large. So if the pirate is large and the victim is large, the proportional change in odds is $14.2 \times 0.06 \approx 0.87 $ or about 13\% reduction in odds. 
+Finally, the effect of being adult is to improve the odds, multiplying them by about 2.5. These are all relative risk measures. For the absolute measures, it will be nice to plot them.
+
+There are many ways to plot the posterior predictions. I will use a straightforward format with cases on the horizontal and probability/count on the vertical. Here is the code for the first plot, showing proportion success on the vertical axis:
+
+```{r}
+eagle_dat$psuccess <- eagle_dat$y / eagle_dat$n
+p <- link(eagle_ulam)
+yy <- sim(eagle_ulam)
+p.mean <- apply(p, 2, mean)
+p.PI <- apply(p ,2, PI)
+y.mean <- apply(yy ,2, mean)
+y.PI <- apply(yy, 2, PI)
+# plot raw proportions success for each case
+plot(eagle_dat$psuccess, col = rangi2, ylab="successful proportion", 
+  xlab="case", xaxt="n", xlim=c(0.75,8.25), pch=16)
+# label cases on horizontal axis
+axis(1, at=1:8, labels=c("LAL","LAS","LIL","LIS","SAL","SAS","SIL","SIS"))
+```
+
+And here is the second plot, showing number of successes on the vertical axis:
+```{r}
+# display posterior predicted probability of success
+points(1:8 , p.mean)
+for(i in 1:8){lines(c(i,i), p.PI[,i])}
+# plot raw counts success for each case
+plot(eagle_dat$y , col=rangi2, ylab="successful attempts", xlab="case", 
+  xaxt="n", xlim=c(0.75,8.25), pch=16)
+# label cases on horizontal axis
+axis(1 ,at=1:8 ,labels=c("LAL","LAS","LIL","LIS","SAL","SAS","SIL","SIS"))
+# display posterior predicted probability of success
+points(1:8 ,y.mean)
+for(i in 1:8){lines(c(i,i), y.PI[,i])}
+
+```
+
+So what is different between these two plots? The biggest difference is probably that the proportion plot (first) makes the probabilities more comparable, because it ignores the sample size for each case on the horizontal axis. 
+This has the advantage of showing, for example, that SIS attempts are predicted to be somewhat successful, even though only four of them were observed. The count plot (second one, in contrast, makes it hard to see the differing probabilities, because samples size varies so much across cases. 
+On the other hand, the count plot (second one) has the advantage of showing additional uncertainty that arises from the binomial process. Inspect the SIS case again, for example. The observed proportion of SIS successes is outside and below the probability interval (probability plot). However, in the count plot, the model can accommodate the SIS cases, due to additional uncertainty arising from the binomial process. In other words, an additional level of stochasticity is factored into the count plot, and so in
+total looking also at counts might be necessary to seriously critique the model.
+
+(c) Now try to improve the model. Consider an interaction between the pirate’s size and age (immature or adult). Compare this model to the previous one, using WAIC. Interpret.
+```{r}
+eagle_ulam2 <- ulam(alist(
+  y ~ dbinom( n , p ),
+  logit(p) <- a + bP*pirateL + bV*victimL + bA*pirateA + bPA*pirateL*pirateA,
+  a ~ dnorm(0,1.5),
+  bP ~ dnorm(0, 1),
+  bV ~ dnorm(0, 1),
+  bA ~ dnorm(0, 1),
+  bPA ~ dnorm(0, 1)
+), data=eagle_dat, chains = 4, log_lik=TRUE)
+compare(eagle_ulam, eagle_ulam2)
+
+```
+We see that there is minimal difference, and the non-interaction model is preferred. Thus, we conclude that the interaction term does not have a large impact on the predictive power of the model.
+
+In this case, I feel more secure appealing to actual \textit{biology} to justify the interaction model. There are good behavioural ecological reasons to expect an interaction, and there is good evidence of one. WAIC is not necessarily the most important thing.
+
+
+Let's look at the estimates for the interaction model:
+\begin{verbatim}
+precis(eagle_ulam2)
+\end{verbatim}
+So when the pirate is both large and adult, the log-odds are slightly smaller. This seems like a weird result. Shouldn't being large and adult help? It does. But the main effects for size and age are also increased a wee bit, when an individual is both large and adult. So it's hard to understand what the model is saying, without computing predictions case by case. Do it by replotting the probability and/or the count scale as before :).
+
+
+## Exercise 4: Multi-level frogs
+Do exercises 13M1 to 13M4. Then 13H4, only after attempting all the others.
+13M1. Revisit the Reed frog survival data, data(reedfrogs), and add the predation and size treatment variables to the varying intercepts model. Consider models with either main effect alone, both main effects, as well as a model including both and their interaction. Instead of focusing on inferences about these two predictor variables, focus on the inferred variation across tanks. Explain why it changes as it does across models.
+
+This corresponds to the multi-level tadpole example in the SR book (starting in section 13.1 on page 415). First, I load the data and prepare the data list as was done in the book and add in the data about predation (binary - yes/no) and size treatment (binary - small/large):
+```{r}
+data(reedfrogs)
+d <- reedfrogs
+dat <- list(
+  S = d$surv,
+  n = d$density,
+  tank = 1:nrow(d),
+  pred = ifelse(d$pred == "no", 0L, 1L),
+  size_ = ifelse(d$size == "small", 1L, 2L))
+
+```
+Tank-only model which will serve as our baseline
+
+```{r}
+m_Tank <- ulam(alist(
+    S ~ dbinom(n, p),
+    logit(p) <- a[tank],
+    a[tank] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1)
+), data = dat, chains = 4, cores = 4, log_lik = TRUE, iter = 2e4)
+```
+
+Predation model
+```{r}
+m_Pred <- ulam(alist(
+    S ~ dbinom(n, p),
+    logit(p) <- a[tank] + bp*pred,
+    a[tank] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1),
+    bp ~ dnorm(-0.5, 1)
+), data = dat, chains = 4, cores = 4, log_lik = TRUE, iter = 2e4)
+```
+
+Size model
+```{r}
+m_Size <- ulam(alist(
+    S ~ dbinom(n, p),
+    logit(p) <- a[tank] + s[size_],
+    a[tank] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1),
+    s[size_] ~ dnorm(0, 0.5)
+), data = dat, chains = 4, cores = 4, log_lik = TRUE, iter = 2e4)
+```
+
+Predation + Size model
+```{r}
+m_Additive <- ulam(alist(
+    S ~ dbinom(n, p),
+    logit(p) <- a[tank] + bp*pred + s[size_],
+    a[tank] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1),
+    bp ~ dnorm(-0.5, 1),
+    s[size_] ~ dnorm(0, 0.5)
+), data = dat, chains = 4, cores = 4, log_lik = TRUE, iter = 2e4)
+
+```
+
+Predation-Size-Interaction model
+```{r}
+m_Interaction <- ulam(alist(
+    S ~ dbinom(n, p),
+    logit(p) <- a[tank] + bp*pred + s[size_] +  bps*pred*s[size_], 
+       # interaction comes in via bP[size_]
+    a[tank] ~ dnorm(a_bar, sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1),
+    c(bp, bps) ~ dnorm(-0.5, 1),
+    s[size_] ~ dnorm(0, 0.5)
+), data = dat, chains = 4, cores = 4, log_lik = TRUE, iter = 2e4)
+```
+
+```{r}
+plot(coeftab(m_Tank, m_Pred, m_Size, m_Additive, m_Interaction),
+  pars="sigma", labels=c("Tank", "Predation", "Size", "Additive", "Interaction")
+)
+```
+Quite evidently, omitting \texttt{pred} (predation) from our models assigns a lot of variation to the tank variable. Conclusively, we can say that predation explains a lot of the variation across tanks and helps to explain it. Omitting predation from our models simply assigns this variation to the tank intercepts without explaining it. Another way to say it is to notice that \texttt{size\_} reduces the variation much less than does \texttt{pred}. The predictor \texttt{size\_}, in these models, doesn't help prediction very much, so accounting for it has minimal impact on the estimated variation across tanks. Predation does seem to matter, even if it doesn't explain much of the total variation.
+
+Note that adding a predictor always decreased the posterior mean variation across tanks. Why? Because the predictors are, well, predicting variation. This leaves less variation for the varying intercepts to mop up. In theory, if we had in the form of predictor variables all of the relevant information that determined the survival outcomes, there would be zero variation across tanks.
+
+13M2. Compare the models you fit just above, using WAIC. Can you reconcile the differences in WAIC with the posterior distributions of the models?
+```{r}
+compare(m_Tank, m_Pred, m_Size, m_Additive, m_Interaction)
+```
+
+All of our models are expected to perform similarly in out-of-sample predictions. So how do the posterior samples look like?
+We don't see all the posterior and the following plots do not tell us how accurate the models are when predicting data. However, they do tell us loads about what the models use to make their predictions:
+
+
+```{r}
+par(mfrow = c(5,1))
+plot(precis(m_Tank), main = "m_Tank")
+plot(precis(m_Pred), main = "m_Pred")
+plot(precis(m_Size, pars = c("a_bar", "sigma", "s"), depth = 2), 
+  main = "m_Size")
+plot(precis(m_Additive, pars = c("a_bar", "sigma", "bp", "s"), depth = 2), 
+  main = "m_Additive")
+plot(precis(m_Interaction, pars = c("a_bar", "sigma", "bp", "bps", "s"), 
+  depth = 2), main = "m_Interaction")
+par(mfrow = c(1,1))
+
+```
+For now, I will focus on the posterior distributions of our predation parameter (\texttt{bp}) and size parameter (\texttt{s}). When inspecting these, it is apparent that the parameter estimates of \texttt{bp} are much further from 0 than those for \texttt{s}. This holds true across all models. In addition, anytime \texttt{bp} is contained in a model, \texttt{sigma} (the variation in tank intercepts) decreases drastically.
+
+This is consistent with the model rankings. All models that contain \texttt{pred} come first. Even the tank-only model does already very well, because there exists variation among tanks for a multitude of reasons. Prediction and inference of causality are not the same thing, after all.
+
+We could also look at the differences in predictions, e.g. using \texttt{m\_Tank} (the one from the chapter) and the ``best'' one \texttt{m\_Pred} graphically. We first reproduce the figure in the chapter:
+```{r}
+post1 <- extract.samples(m_Tank)
+post2 <- extract.samples(m_Pred)
+d$propsurv.est1 <- logistic(apply(post1$a, 2, mean))
+d$propsurv.est2 <- logistic(apply(post2$a, 2, mean) + mean(post2$bp)*dat$pred)
+plot(d$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" ,
+      xlab="tank" , ylab="proportion survival" , col=rangi2 )
+axis(1, at=c(1,16,32,48), labels=c(1,16,32,48))
+points(d$propsurv.est1)
+abline(h=mean(inv_logit(post1$a_bar)), lty=2)
+
+```
+And now the same figure but with the predictions made with the model accounting for predation:
+```{r}
+plot(d$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" ,
+      xlab="tank" , ylab="proportion survival" , col=rangi2 )
+axis(1, at=c(1,16,32,48), labels=c(1,16,32,48))
+points(d$propsurv.est2)
+abline(h=mean(inv_logit(post2$a_bar)), lty=2) #2 bars because 2 levels of pred
+abline(h=mean(inv_logit(post2$a_bar+mean(post2$bp))), lty=2)
+
+```
+
+This was a very long lab, so I am going to skip this last question and put some review questions up.
+## Exercise 5: Number of kids in Bengal
+Do exercise 13H1
+
+# Review questions
+9H2. Recall the divorce rate example from Chapter 5. Repeat that analysis, using ulam this time, fitting models m5.1, m5.2, and m5.3. Use compare to compare the models on the basis of WAIC or PSIS. To use WAIC or PSIS with ulam, you need add the argument log_log=TRUE. Explain the model comparison results.
+
+Below I get you started:
+```{r}
+library(rethinking)
+data(WaffleDivorce)
+d <- WaffleDivorce
+```
+Standardize variables
+```{r}
+colnames(d)
+# predictors: Marriage, MedianAgeMarriage, pct_LDS
+d$A <- standardize( d$MedianAgeMarriage)
+d$M <- standardize( d$Marriage )
+d$D <- standardize( d$Divorce )
+```
+
+```{r}
+# from SR book
+m5.3 <- quap( 
+              alist(
+                D ~ dnorm( mu , sigma ) ,
+                mu <- a + bM*M + bA*A ,
+                a ~ dnorm( 0 , 0.2 ) ,
+                bM ~ dnorm( 0 , 1 ) ,
+                bA ~ dnorm( 0 , 1 ) ,
+                sigma ~ dunif(0, 10) ) ,
+              data = d )
+```
+
+8H1. Return to the data(tulips) example in the chapter. Now include the bed variable as a pre- dictor in the interaction model. Don’t interact bed with the other predictors; just include it as a main effect. Note that bed is categorical. So to use it properly, you will need to either construct dummy variables or rather an index variable, as explained in Chapter 5.
+```{r,echo=TRUE}
+data(tulips)
+d <- tulips
+str(d)
+
+# make bed an index variable
+d$bed_inx <- coerce_index(d$bed)
+
+# center water and shade
+d$water.c <- d$water-mean(d$water)
+d$shade.c <- d$shade-mean(d$shade)
+
+#scale bloom by its max
+d$blooms_std <- d$blooms / max(d$blooms)
+
+# now blooms_std ranges from 0 to 1, and both water_cent and shade_cent range from −1 to 1.
+```
+
+
+
+8H2. Use WAIC to compare the model from 8H1 to a model that omits bed. What do you infer from this comparison? Can you reconcile the WAIC results with the posterior distribution of the bed coefficients?
+
+
+7H4. Recall the marriage, age, and happiness collider bias example from Chapter 6. Run models m6.9 and m6.10 again (page 178). Compare these two models using WAIC (or PSIS, they will produce identical results). Which model is expected to make better predictions? Which model provides the correct causal inference about the influence of age on happiness? Can you explain why the answers to these two questions disagree?
+
+Review old labs and examples in lecture to make sure you are familiar with the concepts as well as model formulation/code used in this class.

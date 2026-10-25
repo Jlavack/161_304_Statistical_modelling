@@ -1,0 +1,306 @@
+---
+title: "Lab6"
+output: pdf_document
+date: "2023-08-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dagitty)
+library(rethinking)
+```
+## Exercise 1: DAG frenzy: two roads DAG modification, 6M1
+Modify the DAG on page 186 to include the variable V, an unobserved cause of C and Y: C ← V → Y. Reanalyze the DAG. How many paths connect X to Y? Which must be closed? Which variables should you condition on now?
+```{r}
+dag_186 <- dagitty("dag{
+X <- U <- A -> C -> Y
+U -> B <- C
+X -> Y
+U [unobserved]
+}")
+coordinates(dag_186) <- list(
+x = c(A = 1, B = 1, C = 2, X = 0, Y = 2, U = 0),
+y = c(A = 0, B = 2, C = 1, X = 4, Y = 4, U = 1))
+drawdag(dag_186)
+```
+```{r}
+dag_186_mod <- dagitty("dag{
+X <- U <- A -> C -> Y
+U -> B <- C
+X -> Y
+C <- V -> Y
+U [unobserved]
+V [unobserved]
+}")
+coordinates(dag_186_mod) <- list(
+x = c(A = 1, B = 1, C = 2, X = 0, Y = 2, U = 0, V =3),
+y = c(A = 0, B = 2, C = 1, X = 4, Y = 4, U = 1, V=2.5))
+drawdag(dag_186_mod)
+```
+```{r}
+paths(dag_186_mod, from = "X", to = "Y")
+adjustmentSets(dag_186_mod, exposure = "X", outcome = "Y")
+```
+There are now 5 paths, 2 are open. Three paths are from the original graph and 2 new ones when V is added.
+
+We only want to keep X -> Y open because it is the causal path of interest. (Test your knowledge: the other paths are called _____ because they are non-causal.)
+Paths 2 and 3 are already closed because B is the collider. Path 5 is also closed because C is a collider too. Path 4 is open because A is a fork and C is a pipe in this path. To close this path we could condition on A or C but C is a collider in a different path so if we conditioned on C we'd be opening up a new path through V. Therefore, if we want to make inferences about the causal effets of X on Y we must only condition on A (if our DAG is correct). 
+
+
+## Exercise 2: Multicollinearity, a bad practice, 6M2
+
+Sometimes, in order to avoid multicollinearity, people inspect pairwise correlations among
+predictors before including them in a model. This is a bad procedure, because what matters is the conditional association, not the association before the variables are included in the model. To highlight this, consider the DAG X → Z → Y. Simulate data from this DAG so that the correlation between X and Z is very large. Then include both in a model prediction Y. Do you observe any multicollinearity? Why or why not? What is different from the legs example in the chapter?
+
+Simulate data
+```{r}
+set.seed(1988)
+n = 1000 # samples
+x = rnorm(n, mean = 0, sd = 1) # normal distribution
+z = rnorm(n, mean = x, sd = 0.1) # based on DAG x -> z -> y ## in the recording I had a bigger SD (SD=1) here, play with this parameter to see how it effects the estimations in the model, and how the data changes
+y = rnorm(n, mean = z, sd = 1) 
+dat <- data.frame(x=x, z=z, y=y) # make data frame
+cor( x, z ) # correlation
+
+pairs(dat) # view the simulated data
+```
+Write a model regressing y on both x and z
+```{r}
+mod_6m2 <- quap(alist(
+  y ~ dnorm( mu, sigma ),
+  mu <- alpha + beta.x * x + beta.z * z,
+  alpha ~ dnorm(0, 0.2),
+  c(beta.x, beta.z) ~ dnorm( 0, 0.5 ),
+  sigma ~ dexp(1)
+), data = dat)
+
+plot( precis( mod_6m2 ) )
+
+```
+Both Beta.x and beta.z have estimates with wide posterior distributions (when SD is smaller in z). As the sd of the distribution we are simulating z from decreases (becomes closer to the mean) the posterior of beta.z and beta.x get wider because the correlation between z and x increases.
+
+# leg example
+```{r}
+N <- 100 # number of individuals
+set.seed(909)
+height <- rnorm(N,10,2) # sim total height of each
+leg_prop <- runif(N,0.4,0.5) # leg as proportion of height
+leg_left <- leg_prop*height + # sim left leg as proportion + error
+rnorm( N , 0 , 0.02 )
+leg_right <- leg_prop*height + # sim right leg as proportion + error
+rnorm( N , 0 , 0.02 )
+# combine into data frame
+d <- data.frame(height,leg_left,leg_right)
+
+pairs(d)
+cor( leg_left, leg_right)
+```
+possible dags
+LR -> H <- LL 
+LR <- H -> LL
+
+model from chapter
+```{r}
+m6.1 <- quap(
+  alist(
+  height ~ dnorm( mu , sigma ) ,
+  mu <- a + bl*leg_left + br*leg_right ,
+  a ~ dnorm( 10 , 100 ) ,
+  bl ~ dnorm( 2 , 10 ) ,
+  br ~ dnorm( 2 , 10 ) ,
+  sigma ~ dexp( 1 )
+  ) , data=d )
+plot( precis(m6.1) )
+```
+Compare this result to our X -> Z -> Y example. Notice the scales of the x axis in each plot. In our X -> Z -> Y example the SD and magnitude of our estimates (beta.x and beta.z) were on the same scale for example beta.x had a mean of 0.27 and a SD of	0.24 while bl (beta left leg) had a mean of 0.21 and a SD of 2.53
+
+Whether or not a model has multicollinearity depends not only on the pairwise relationship but also on the causal model.
+Compare the DAGs for the two models above.
+
+## Exercise 3: DAGs and more DAGs, 6M3
+Learning to analyze DAGs requires practice. For each of the four DAGs below, state which
+variables, if any, you must adjust for (condition on) to estimate the total causal influence of X on Y.
+
+```{r top left}
+dag_1 <- dagitty("dag{
+X <- Z -> Y
+Z <- A -> Y
+X -> Y
+}")
+coordinates(dag_1) <- list(
+x = c(A = 2, Z = 1,  X = 0, Y = 2),
+y = c(A = 2, Z = 2, X = 4, Y = 4))
+drawdag(dag_1)
+
+paths(dag_1, from = "X", to = "Y") # 2 backdoor paths and 1 causal, all are open. 
+adjustmentSets(dag_1, exposure = "X", outcome = "Y") # conditioning on z would close both paths
+```
+
+```{r top right}
+dag_2 <- dagitty("dag{
+X -> Z -> Y
+Z <- A -> Y
+X -> Y
+}")
+coordinates(dag_2) <- list(
+x = c(A = 2, Z = 1,  X = 0, Y = 2),
+y = c(A = 2, Z = 2, X = 4, Y = 4))
+drawdag(dag_2)
+
+paths(dag_2, from = "X", to = "Y")
+adjustmentSets(dag_2, exposure = "X", outcome = "Y")
+```
+
+```{r bottom left}
+dag_3 <- dagitty("dag{
+X -> Z <- Y
+Z <- A -> X
+X -> Y
+}")
+coordinates(dag_3) <- list(
+x = c(A = 0, Z = 1,  X = 0, Y = 2),
+y = c(A = 2, Z = 2, X = 4, Y = 4))
+drawdag(dag_3)
+
+paths(dag_3, from = "X", to = "Y")
+adjustmentSets(dag_3, exposure = "X", outcome = "Y")
+```
+
+
+```{r bottom right}
+dag_4 <- dagitty("dag{
+X -> Z -> Y
+Z <- A -> X
+X -> Y
+}")
+coordinates(dag_4) <- list(
+x = c(A = 0, Z = 1,  X = 0, Y = 2),
+y = c(A = 2, Z = 2, X = 4, Y = 4))
+drawdag(dag_4)
+
+paths(dag_4, from = "X", to = "Y")
+adjustmentSets(dag_4, exposure = "X", outcome = "Y")
+```
+
+## Exercise 4: Waffle House 6H1 
+Use the Waffle House data, data(WaffleDivorce), to find the total causal influence of number
+of Waffle Houses on divorce rate. Justify your model or models with a causal graph.
+
+```{r}
+# wd <- data(WaffleDivorce)
+data(WaffleDivorce)
+wd <- WaffleDivorce
+```
+
+We will use the causal model given in the chapter
+```{r DAG waffle}
+waffle_dag <- dagitty("dag { S -> W -> D <- A <- S -> M -> D; A -> M }")
+coordinates(waffle_dag) <- list(x = c(A = 1, S = 1, M = 2, W = 3, D = 3),
+y = c(A = 1, S = 3, M = 2, W = 3, D = 1))
+drawdag(waffle_dag)
+adjustmentSets(waffle_dag, exposure = "W", outcome = "D")
+
+```
+
+Standardize data just to make our lives easy for fitting 
+```{r standardize data}
+wd$A <- standardize(wd$MedianAgeMarriage)
+wd$D <- standardize(wd$Divorce)
+wd$M <- standardize(wd$Marriage)
+wd$W <- standardize(wd$WaffleHouses)
+wd$S <- as.factor(wd$South)
+```
+
+Make model
+```{r}
+# for the ssimplist adjustment condition on S
+# S is binary, yes/no so we added it as an indexing variable to the intercept
+W_D_mod <- quap( alist(
+  D ~ dnorm( mu, sigma ),
+  mu <- alpha[S] + beta.w*W,
+  alpha[S] ~ dnorm( 0, 0.5),
+  beta.w ~ dnorm( 0, 0.5),
+  sigma ~ dexp(1)
+), data = wd )
+
+plot(precis(W_D_mod))
+precis(W_D_mod, depth=2) # add depth=2 to see the alpha's
+```
+
+Look at causal estimate of Waffle houses on divorce rate by looking at posterior of beta.w.
+```{r}
+post <- extract.samples( W_D_mod, n = 10000)
+dens(post$beta.w, show.HPDI = 0.9)
+```
+This estimate is very small, indicating that the number of waffle houses has little to no causal impact on divorce rates of a state.  
+
+# Stopped here in the recording/in person
+```{r}
+# did not show this in the recording but this is a second adjustment set
+# another adjustment set was A and M both
+W_D_mod2 <- quap( alist(
+  D ~ dnorm( mu, sigma ),
+  mu <- alpha + beta.w*W+ beta.m*M+ beta.a*A,
+  alpha ~ dnorm( 0, 0.5),
+  c(beta.w, beta.m, beta.a) ~ dnorm( 0, 0.5),
+  sigma ~ dexp(1)
+), data = wd )
+
+plot(precis(W_D_mod2))
+precis(W_D_mod2)
+```
+
+
+## 6H2
+Build a series of models to test the implied conditional independencies of the causal graph
+you used in the previous problem. If any of the tests fail, how do you think the graph needs to be
+amended? Does the graph need more or fewer arrows? Feel free to nominate variables that aren’t in
+the data.
+
+Use DAG from above
+```{r}
+waffle_dag <- dagitty("dag { S -> W -> D <- A <- S -> M -> D; A -> M }")
+coordinates(waffle_dag) <- list(x = c(A = 1, S = 1, M = 2, W = 3, D = 3),
+y = c(A = 1, S = 3, M = 2, W = 3, D = 1))
+drawdag(waffle_dag)
+```
+implied conditional independencies 
+```{r}
+impliedConditionalIndependencies(waffle_dag)
+```
+
+There are three models to estimate to evaluate the implied conditional independencies. 
+Think of 'given' as the variable you should condtion on
+```{r}
+# A independent of W given S
+waffmod_ci1 <- quap( alist(
+  A ~ dnorm(mu, sigma),
+  mu <- alpha[S] + beta.w*W, # condition on S by adding it as an index variable to the intercept
+  alpha[S] ~ dnorm(0, 0.5),
+  beta.w ~ dnorm(0, 0.5),
+  sigma ~ dexp(1)
+), data = wd)
+
+post1 <- extract.samples(waffmod_ci1, n = 10000)
+dens(post1$beta.w, show.HPDI = 0.9)
+```
+The estimate of beta.w centers around 0, therefore we would say that A and W are independent.
+
+Can you fill in the other models?
+```{r}
+# D independent of S given A, M, W
+```
+
+
+```{r}
+# M independent of W given S
+```
+
+
+
+
+
+
+
+
